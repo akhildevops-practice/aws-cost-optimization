@@ -1,0 +1,168 @@
+***************************************AWS LAMBDA*********************************************************88
+AWS COST-OPTIMIZATION PROJECT:
+
+* Create an ec2 instance with an ebs volume, just create an another ebs volume. Create a snapshot
+* Create lambda function, and add the code of aws cost optimization code from GitHub.
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+import boto3
+
+def lambda_handler(event, context):
+    ec2 = boto3.client('ec2')
+
+    # Get all EBS snapshots
+    response = ec2.describe_snapshots(OwnerIds=['self'])
+
+    # Get all active EC2 instance IDs
+    instances_response = ec2.describe_instances(Filters=[{'Name': 'instance-state-name', 'Values': ['running']}])
+    active_instance_ids = set()
+
+    for reservation in instances_response['Reservations']:
+        for instance in reservation['Instances']:
+            active_instance_ids.add(instance['InstanceId'])
+
+    # Iterate through each snapshot and delete if it's not attached to any volume or the volume is not attached to a running instance
+    for snapshot in response['Snapshots']:
+        snapshot_id = snapshot['SnapshotId']
+        volume_id = snapshot.get('VolumeId')
+
+        if not volume_id:
+            # Delete the snapshot if it's not attached to any volume
+            ec2.delete_snapshot(SnapshotId=snapshot_id)
+            print(f"Deleted EBS snapshot {snapshot_id} as it was not attached to any volume.")
+        else:
+            # Check if the volume still exists
+            try:
+                volume_response = ec2.describe_volumes(VolumeIds=[volume_id])
+                if not volume_response['Volumes'][0]['Attachments']:
+                    ec2.delete_snapshot(SnapshotId=snapshot_id)
+                    print(f"Deleted EBS snapshot {snapshot_id} as it was taken from a volume not attached to any running instance.")
+            except ec2.exceptions.ClientError as e:
+                if e.response['Error']['Code'] == 'InvalidVolume.NotFound':
+                    # The volume associated with the snapshot is not found (it might have been deleted)
+                    ec2.delete_snapshot(SnapshotId=snapshot_id)
+                    print(f"Deleted EBS snapshot {snapshot_id} as its associated volume was not found.")
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+* Create a test event, with these we will be trigger an event manually. After that click on test.
+* We will get an error of execution failed with 3 seconds. Now we will increase the execution time from general configuration, increase it to 10 seconds.
+* And we also need to change the permissions, go to configuration >> permsissions >> click on the link of role(cost-optimization)
+* IAM will be opened we  can see basic lambda execution role, Here if we search for snapshot we will get nothing, because there will no default things for snapshots.
+* So we need to create a role of ec2, in role search for snapshots we can see read, write, execution things >> select delete and describe snapshots, resources >> all.
+* After creating policy we need to attach policy, go to the permissions and click on role.
+* Now we trigger an error of describing instances, so we need to attach another policy to describe instances, describe volumes, ( here we can give full access of ec2) policy name ec2-permissions and attch it to the role.
+* Now test again the script will be executed.
+* check the snapshots it is not deleted, by terminating ec2 instance we can see that volume also terminates. But snapshot will be there.
+* Test again we can see that ebs snapshot is deleted as its associated volume not found. Check snapshots it will be deleted.
+* We can make use of this code by using if, to remove stale resources by mentioning 30 days threshold for example and can make for any service.
+* Create an ebs volume and attach it to snapsot, test we can see that snapshot is deleted but volume is present because we made a config that if an ebs volume is not attached to ec2 instance delete the snapshot.
+
+
+
+
+
+Let's break down this AWS Lambda function step by step.
+
+### **1. Import the Boto3 Library**
+```python
+import boto3
+```
+- **Explanation**: 
+  - `boto3` is the AWS SDK for Python. It allows Python developers to interact with AWS services, such as EC2, S3, Lambda, and more.
+  - This line imports the `boto3` library so that you can use its functions to interact with AWS services within your Lambda function.
+
+### **2. Define the Lambda Handler**
+```python
+def lambda_handler(event, context):
+```
+- **Explanation**: 
+  - The `lambda_handler` function is the main entry point for the Lambda function. AWS invokes this function when the Lambda function is triggered.
+  - The `event` parameter contains data about the event that triggered the function, while `context` provides runtime information about the Lambda function execution.
+
+### **3. Create an EC2 Client**
+```python
+    ec2 = boto3.client('ec2')
+```
+- **Explanation**: 
+  - This line creates a client object for the EC2 service using `boto3.client('ec2')`.
+  - The `ec2` object is used to make API calls to the EC2 service, such as retrieving information about EC2 instances, EBS volumes, and snapshots.
+
+### **4. Get All EBS Snapshots**
+```python
+    response = ec2.describe_snapshots(OwnerIds=['self'])
+```
+- **Explanation**: 
+  - This line calls the `describe_snapshots` method to retrieve all EBS snapshots owned by the AWS account that owns the Lambda function.
+  - The `OwnerIds=['self']` filter ensures that only the snapshots owned by the current account are returned.
+  - The `response` object contains information about each snapshot, such as its ID, volume ID, and other metadata.
+
+### **5. Get All Active EC2 Instance IDs**
+```python
+    instances_response = ec2.describe_instances(Filters=[{'Name': 'instance-state-name', 'Values': ['running']}])
+    active_instance_ids = set()
+```
+- **Explanation**: 
+  - `describe_instances` is used to retrieve information about EC2 instances. The `Filters` parameter is used to filter instances that are in the "running" state.
+  - The result is stored in `instances_response`.
+  - `active_instance_ids` is initialized as an empty set to store the IDs of active instances.
+
+### **6. Extract Active Instance IDs**
+```python
+    for reservation in instances_response['Reservations']:
+        for instance in reservation['Instances']:
+            active_instance_ids.add(instance['InstanceId'])
+```
+- **Explanation**: 
+  - EC2 instance information is grouped into "reservations," and each reservation can contain multiple instances.
+  - This loop iterates over all instances within all reservations and adds the ID of each running instance to the `active_instance_ids` set.
+
+### **7. Iterate Through Each Snapshot**
+```python
+    for snapshot in response['Snapshots']:
+        snapshot_id = snapshot['SnapshotId']
+        volume_id = snapshot.get('VolumeId')
+```
+- **Explanation**: 
+  - This loop iterates over each snapshot retrieved in step 4.
+  - `snapshot_id` and `volume_id` store the snapshot's ID and the associated volume ID, respectively.
+  - `snapshot.get('VolumeId')` is used to safely access the volume ID, which might not exist for all snapshots.
+
+### **8. Delete Unused Snapshots**
+```python
+        if not volume_id:
+            ec2.delete_snapshot(SnapshotId=snapshot_id)
+            print(f"Deleted EBS snapshot {snapshot_id} as it was not attached to any volume.")
+```
+- **Explanation**: 
+  - If the `volume_id` is `None`, it means that the snapshot is not associated with any EBS volume. This can happen if the volume has been deleted.
+  - The snapshot is deleted using `ec2.delete_snapshot(SnapshotId=snapshot_id)`.
+  - A message is printed to confirm the deletion.
+
+### **9. Check if the Volume Still Exists**
+```python
+        else:
+            try:
+                volume_response = ec2.describe_volumes(VolumeIds=[volume_id])
+                if not volume_response['Volumes'][0]['Attachments']:
+                    ec2.delete_snapshot(SnapshotId=snapshot_id)
+                    print(f"Deleted EBS snapshot {snapshot_id} as it was taken from a volume not attached to any running instance.")
+```
+- **Explanation**: 
+  - If `volume_id` exists, the function checks whether the associated volume still exists using `describe_volumes`.
+  - If the volume exists but is not attached to any instance (indicated by an empty `Attachments` list), the snapshot is deleted.
+  - A message is printed to confirm the deletion.
+
+### **10. Handle Volume Not Found Exception**
+```python
+            except ec2.exceptions.ClientError as e:
+                if e.response['Error']['Code'] == 'InvalidVolume.NotFound':
+                    ec2.delete_snapshot(SnapshotId=snapshot_id)
+                    print(f"Deleted EBS snapshot {snapshot_id} as its associated volume was not found.")
+```
+- **Explanation**: 
+  - If the `describe_volumes` call fails because the volume does not exist (perhaps it was deleted after the snapshot was taken), an exception is raised.
+  - The exception is caught and checked to see if it is an `InvalidVolume.NotFound` error.
+  - If this is the case, the snapshot is deleted, and a message is printed to confirm the deletion.
+
+### **Summary**
+- This Lambda function is designed to clean up stale EBS snapshots that are no longer associated with active EC2 instances.
+- It automates cost optimization by identifying and deleting unnecessary snapshots, freeing up storage space, and reducing AWS costs.
